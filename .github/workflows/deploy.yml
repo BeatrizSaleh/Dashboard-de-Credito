@@ -1,0 +1,45 @@
+name: Atualizar dados e publicar no shinyapps.io
+
+on:
+  schedule:
+    - cron: "0 6 * * *"   # todo dia às 06:00 UTC (ajuste se quiser outro horário)
+  workflow_dispatch:      # permite rodar manualmente pelo GitHub
+  push:
+    branches: [ main ]    # ou "master", se seu branch principal for master
+
+jobs:
+  build-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checar código do repositório
+        uses: actions/checkout@v4
+
+      - name: Configurar R
+        uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: '4.4.0'
+
+      - name: Instalar pacotes R
+        uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          packages: |
+            shiny
+            shinydashboard
+            tidyverse
+            GetBCBData
+            DT
+            rsconnect
+
+      - name: Rodar script de atualização de dados
+        run: |
+          Rscript update_data.R
+
+      - name: Deploy no shinyapps.io
+        env:
+          SHINYAPPS_NAME: ${{ secrets.SHINYAPPS_NAME }}
+          SHINYAPPS_TOKEN: ${{ secrets.SHINYAPPS_TOKEN }}
+          SHINYAPPS_SECRET: ${{ secrets.SHINYAPPS_SECRET }}
+        run: |
+          R -e "rsconnect::setAccountInfo(name=Sys.getenv('SHINYAPPS_NAME'), token=Sys.getenv('SHINYAPPS_TOKEN'), secret=Sys.getenv('SHINYAPPS_SECRET'))"
+          R -e "rsconnect::deployApp('.', forceUpdate = TRUE)"
