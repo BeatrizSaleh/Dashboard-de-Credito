@@ -2,7 +2,7 @@ name: Atualizar dados e publicar no shinyapps.io
 
 on:
   schedule:
-    - cron: "0 9 * * *"   # todo dia às 06:00 UTC (ajuste se quiser outro horário)
+    - cron: "0 9 * * *"   # todo dia às 09:00 UTC (ajuste se quiser outro horário)
   workflow_dispatch:      # permite rodar manualmente pelo GitHub
   push:
     branches: [ main ]    # ou "master", se seu branch principal for master
