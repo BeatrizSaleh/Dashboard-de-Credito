@@ -6,6 +6,13 @@
 #  - Lê os dados prontos de data/dados_bcb.rds
 #  - Usa os campos já calculados (var_mm, var_aa, etc.)
 #
+# Visão Geral Tab:
+#  - Mostra dados consolidados de 12 meses para:
+#    * Saldo Total, PF, PJ (valores mais recentes com variação 12m)
+#    * Concessões Total, PF, PJ (acumulado dos últimos 12 meses)
+#    * Juros Total, PF, PJ (média dos últimos 12 meses)
+#    * Inadimplência Total, PF, PJ (média dos últimos 12 meses)
+#
 # Certifique-se de que:
 #  - o arquivo data/dados_bcb.rds existe
 #  - foi gerado pelo update_data.R
@@ -158,15 +165,29 @@ ui <- dashboardPage(
       #-------------------------
       tabItem(
         tabName = "visao_geral",
+        h3("Saldos (valores mais recentes - 12 meses)"),
         fluidRow(
+          valueBoxOutput("kpi_saldo_total", width = 4),
           valueBoxOutput("kpi_saldo_pf",    width = 4),
-          valueBoxOutput("kpi_saldo_pj",    width = 4),
-          valueBoxOutput("kpi_saldo_total", width = 4)
+          valueBoxOutput("kpi_saldo_pj",    width = 4)
         ),
+        h3("Concessões (acumulado 12 meses)"),
         fluidRow(
+          valueBoxOutput("kpi_concessao_total", width = 4),
+          valueBoxOutput("kpi_concessao_pf",    width = 4),
+          valueBoxOutput("kpi_concessao_pj",    width = 4)
+        ),
+        h3("Taxas de Juros (média 12 meses)"),
+        fluidRow(
+          valueBoxOutput("kpi_juros_total", width = 4),
+          valueBoxOutput("kpi_juros_pf",    width = 4),
+          valueBoxOutput("kpi_juros_pj",    width = 4)
+        ),
+        h3("Inadimplência (média 12 meses)"),
+        fluidRow(
+          valueBoxOutput("kpi_inad_total",  width = 4),
           valueBoxOutput("kpi_inad_pf",     width = 4),
-          valueBoxOutput("kpi_inad_pj",     width = 4),
-          valueBoxOutput("kpi_inad_total",  width = 4)
+          valueBoxOutput("kpi_inad_pj",     width = 4)
         )
       ),
       
@@ -314,9 +335,11 @@ server <- function(input, output, session) {
   })
   
   #--------------------------------
-  # VISÃO GERAL - KPIs
+  # VISÃO GERAL - KPIs (12 MESES)
   #--------------------------------
-  kpi_serie <- function(nome_serie, titulo, cor = "blue") {
+  
+  # Função para KPIs de Saldo (acumulado 12 meses - valor mais recente)
+  kpi_saldo_12m <- function(nome_serie, titulo, cor = "blue") {
     renderValueBox({
       df <- dados_todos() %>% filter(series.name == nome_serie)
       
@@ -326,18 +349,35 @@ server <- function(input, output, session) {
       )
       
       df <- df %>% arrange(data)
+      
+      # Pega os últimos 12 meses
+      ultimos_12 <- df %>% tail(12)
+      
+      # Para Saldo, mostramos o valor mais recente
       ultimo <- dplyr::last(df)
       
       valor_txt <- formatar_bilhoes(ultimo$valor)
-      data_txt  <- formatar_mes_ano(ultimo$data)
-      mm_txt    <- formatar_pct(ultimo$var_mm)
-      aa_txt    <- formatar_pct(ultimo$var_aa)
+      data_final <- formatar_mes_ano(ultimo$data)
+      
+      # Calcula variação nos últimos 12 meses
+      if (nrow(ultimos_12) >= 2) {
+        valor_inicial <- ultimos_12$valor[1]
+        valor_final <- ultimo$valor
+        # Verifica divisão por zero
+        if (!is.na(valor_inicial) && valor_inicial != 0) {
+          var_12m <- ((valor_final / valor_inicial) - 1) * 100
+          var_12m_txt <- formatar_pct(var_12m)
+        } else {
+          var_12m_txt <- "—"
+        }
+      } else {
+        var_12m_txt <- "—"
+      }
       
       subtitle_html <- HTML(
         paste0(
-          titulo, " (", data_txt, ")",
-          "<br>m/m: ", mm_txt,
-          " | a/a: ", aa_txt
+          titulo, " (", data_final, ")",
+          "<br>Variação 12 meses: ", var_12m_txt
         )
       )
       
@@ -350,11 +390,8 @@ server <- function(input, output, session) {
     })
   }
   
-  output$kpi_saldo_pf    <- kpi_serie("Saldo total PF",   "Saldo total PF",   "blue")
-  output$kpi_saldo_pj    <- kpi_serie("Saldo total PJ",   "Saldo total PJ",   "blue")
-  output$kpi_saldo_total <- kpi_serie("Saldo total",      "Saldo total",      "blue")
-  
-  kpi_inadimplencia <- function(nome_serie, titulo, cor = "red") {
+  # Função para KPIs de Concessões (acumulado 12 meses)
+  kpi_concessao_12m <- function(nome_serie, titulo, cor = "green") {
     renderValueBox({
       df <- dados_todos() %>% filter(series.name == nome_serie)
       
@@ -364,18 +401,97 @@ server <- function(input, output, session) {
       )
       
       df <- df %>% arrange(data)
-      ultimo <- dplyr::last(df)
       
-      valor_txt <- formatar_pct(ultimo$valor)
-      data_txt  <- formatar_mes_ano(ultimo$data)
-      mm_txt    <- formatar_pct(ultimo$var_mm)
-      aa_txt    <- formatar_pct(ultimo$var_aa)
+      # Pega os últimos 12 meses e soma
+      ultimos_12 <- df %>% tail(12)
+      valor_acum_12m <- sum(ultimos_12$valor, na.rm = TRUE)
+      
+      valor_txt <- formatar_bilhoes(valor_acum_12m)
+      
+      # Período de referência
+      data_inicial <- formatar_mes_ano(ultimos_12$data[1])
+      data_final <- formatar_mes_ano(dplyr::last(ultimos_12)$data)
       
       subtitle_html <- HTML(
         paste0(
-          titulo, " (", data_txt, ")",
-          "<br>m/m: ", mm_txt,
-          " | a/a: ", aa_txt
+          titulo,
+          "<br>Acumulado 12 meses (", data_inicial, " a ", data_final, ")"
+        )
+      )
+      
+      valueBox(
+        value    = valor_txt,
+        subtitle = subtitle_html,
+        icon     = icon("hand-holding-usd"),
+        color    = cor
+      )
+    })
+  }
+  
+  # Função para KPIs de Juros (média 12 meses)
+  kpi_juros_12m <- function(nome_serie, titulo, cor = "yellow") {
+    renderValueBox({
+      df <- dados_todos() %>% filter(series.name == nome_serie)
+      
+      validate(
+        need(nrow(df) > 0,
+             paste("Sem dados para", nome_serie, "no período selecionado."))
+      )
+      
+      df <- df %>% arrange(data)
+      
+      # Pega os últimos 12 meses e calcula média
+      ultimos_12 <- df %>% tail(12)
+      media_12m <- mean(ultimos_12$valor, na.rm = TRUE)
+      
+      valor_txt <- formatar_pct(media_12m)
+      
+      # Período de referência
+      data_inicial <- formatar_mes_ano(ultimos_12$data[1])
+      data_final <- formatar_mes_ano(dplyr::last(ultimos_12)$data)
+      
+      subtitle_html <- HTML(
+        paste0(
+          titulo,
+          "<br>Média 12 meses (", data_inicial, " a ", data_final, ")"
+        )
+      )
+      
+      valueBox(
+        value    = valor_txt,
+        subtitle = subtitle_html,
+        icon     = icon("percent"),
+        color    = cor
+      )
+    })
+  }
+  
+  # Função para KPIs de Inadimplência (média 12 meses)
+  kpi_inadimplencia_12m <- function(nome_serie, titulo, cor = "red") {
+    renderValueBox({
+      df <- dados_todos() %>% filter(series.name == nome_serie)
+      
+      validate(
+        need(nrow(df) > 0,
+             paste("Sem dados para", nome_serie, "no período selecionado."))
+      )
+      
+      df <- df %>% arrange(data)
+      
+      # Pega os últimos 12 meses e calcula média
+      ultimos_12 <- df %>% tail(12)
+      media_12m <- mean(ultimos_12$valor, na.rm = TRUE)
+      
+      valor_txt <- formatar_pct(media_12m)
+      
+      # Período de referência
+      data_inicial <- formatar_mes_ano(ultimos_12$data[1])
+      data_final <- formatar_mes_ano(dplyr::last(ultimos_12)$data)
+      
+      subtitle_html <- HTML(
+        paste0(
+          titulo,
+          "<br>Média 12 meses (", data_inicial, " a ", data_final, ")"
         )
       )
       
@@ -388,9 +504,25 @@ server <- function(input, output, session) {
     })
   }
   
-  output$kpi_inad_pf    <- kpi_inadimplencia("Inadimplência PF",    "Inadimplência PF")
-  output$kpi_inad_pj    <- kpi_inadimplencia("Inadimplência PJ",    "Inadimplência PJ")
-  output$kpi_inad_total <- kpi_inadimplencia("Inadimplência total", "Inadimplência total")
+  # Saldo (valor mais recente)
+  output$kpi_saldo_total <- kpi_saldo_12m("Saldo total",    "Saldo Total",    "blue")
+  output$kpi_saldo_pf    <- kpi_saldo_12m("Saldo total PF", "Saldo PF",       "blue")
+  output$kpi_saldo_pj    <- kpi_saldo_12m("Saldo total PJ", "Saldo PJ",       "blue")
+  
+  # Concessões (acumulado 12 meses)
+  output$kpi_concessao_total <- kpi_concessao_12m("Concessões totais",    "Concessão Total", "green")
+  output$kpi_concessao_pf    <- kpi_concessao_12m("Concessões totais PF", "Concessão PF",    "green")
+  output$kpi_concessao_pj    <- kpi_concessao_12m("Concessões totais PJ", "Concessão PJ",    "green")
+  
+  # Juros (média 12 meses)
+  output$kpi_juros_total <- kpi_juros_12m("Juros total",    "Taxa de Juros Média Total", "yellow")
+  output$kpi_juros_pf    <- kpi_juros_12m("Juros total PF", "Taxa de Juros Média PF",    "yellow")
+  output$kpi_juros_pj    <- kpi_juros_12m("Juros total PJ", "Taxa de Juros Média PJ",    "yellow")
+  
+  # Inadimplência (média 12 meses)
+  output$kpi_inad_total <- kpi_inadimplencia_12m("Inadimplência total", "Inadimplência Média Total", "red")
+  output$kpi_inad_pf    <- kpi_inadimplencia_12m("Inadimplência PF",    "Inadimplência Média PF",    "red")
+  output$kpi_inad_pj    <- kpi_inadimplencia_12m("Inadimplência PJ",    "Inadimplência Média PJ",    "red")
   
   #--------------------------------
   # SÉRIES TEMPORAIS
