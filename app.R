@@ -6,6 +6,13 @@
 #  - Lê os dados prontos de data/dados_bcb.rds
 #  - Usa os campos já calculados (var_mm, var_aa, etc.)
 #
+# Visão Geral Tab:
+#  - Mostra dados consolidados de 12 meses para:
+#    * Saldo Total, PF, PJ (valores mais recentes com variação 12m)
+#    * Concessões Total, PF, PJ (acumulado dos últimos 12 meses)
+#    * Juros Total, PF, PJ (média dos últimos 12 meses)
+#    * Inadimplência Total, PF, PJ (média dos últimos 12 meses)
+#
 # Certifique-se de que:
 #  - o arquivo data/dados_bcb.rds existe
 #  - foi gerado pelo update_data.R
@@ -356,8 +363,13 @@ server <- function(input, output, session) {
       if (nrow(ultimos_12) >= 2) {
         valor_inicial <- ultimos_12$valor[1]
         valor_final <- ultimo$valor
-        var_12m <- ((valor_final / valor_inicial) - 1) * 100
-        var_12m_txt <- formatar_pct(var_12m)
+        # Verifica divisão por zero
+        if (!is.na(valor_inicial) && valor_inicial != 0) {
+          var_12m <- ((valor_final / valor_inicial) - 1) * 100
+          var_12m_txt <- formatar_pct(var_12m)
+        } else {
+          var_12m_txt <- "—"
+        }
       } else {
         var_12m_txt <- "—"
       }
