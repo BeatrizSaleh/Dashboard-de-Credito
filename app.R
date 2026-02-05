@@ -1,24 +1,15 @@
 # app.R
-# Dashboard de Crédito - versão rápida usando data/dados_bcb.rds
-#
-# Este app:
-#  - NÃO chama a API do BCB diretamente
-#  - Lê os dados prontos de data/dados_bcb.rds
-#  - Usa os campos já calculados (var_mm, var_aa, etc.)
-#
-# Certifique-se de que:
-#  - o arquivo data/dados_bcb.rds existe
-#  - foi gerado pelo update_data.R
 
 library(shiny)
 library(shinydashboard)
 library(tidyverse)
 library(DT)
+library(scales)
+library(lubridate)
 
 #----------------------------------------
 # 0) Carrega dados pré-processados (.rds)
 #----------------------------------------
-
 if (file.exists("data/dados_bcb.rds")) {
   dados_bcb <- readRDS("data/dados_bcb.rds")
 } else {
@@ -26,7 +17,9 @@ if (file.exists("data/dados_bcb.rds")) {
   dados_bcb <- tibble()
 }
 
+#----------------------------------------
 # Metadados dos indicadores (mesma estrutura do update_data.R)
+#----------------------------------------
 indicadores_meta <- tibble::tribble(
   ~grupo,           ~carteira,      ~segmento, ~subgrupo,       ~nome_curto,                                     ~id_sgs,
   "Saldo",          "Total",        "PF",      "Geral",         "Saldo total PF",                                20541,
@@ -92,24 +85,23 @@ indicadores_meta <- tibble::tribble(
 )
 
 #----------------------------------------
-# Funções auxiliares de formatação
+# Formatação (pt-BR)
 #----------------------------------------
-
-formatar_bilhoes <- function(x) {
-  val <- x / 1e9
+fmt_bi_brl <- function(x, digitos = 2) {
+  if (is.na(x)) return("—")
   paste0(
     "R$ ",
-    format(round(val, 1), big.mark = ".", decimal.mark = ","),
+    scales::number(x, accuracy = 10^(-digitos), big.mark = ".", decimal.mark = ","),
     " bi"
   )
 }
 
-formatar_pct <- function(x) {
+fmt_pct <- function(x, digitos = 1) {
   if (is.na(x)) return("—")
   sinal <- ifelse(x > 0, "+", "")
   paste0(
     sinal,
-    format(round(x, 1), big.mark = ".", decimal.mark = ","),
+    scales::number(x, accuracy = 10^(-digitos), big.mark = ".", decimal.mark = ","),
     "%"
   )
 }
@@ -117,9 +109,8 @@ formatar_pct <- function(x) {
 formatar_mes_ano <- function(d) format(d, "%m/%Y")
 
 #----------------------------------------
-# Definição de datas padrão do filtro
+# Datas padrão (ancoradas no arquivo)
 #----------------------------------------
-
 if (nrow(dados_bcb) > 0) {
   data_inicio_default <- max(min(dados_bcb$data), as.Date("2015-01-01"))
   data_fim_default    <- max(dados_bcb$data)
@@ -131,42 +122,116 @@ if (nrow(dados_bcb) > 0) {
 #----------------------------------------
 # UI
 #----------------------------------------
-
 ui <- dashboardPage(
   dashboardHeader(title = "Dashboard de Crédito - BCB"),
   
   dashboardSidebar(
     sidebarMenu(
-      menuItem("Visão geral", tabName = "visao_geral", icon = icon("tachometer-alt")),
+      menuItem("Visão geral (último mês)", tabName = "visao_geral_mes", icon = icon("calendar-check")),
+      menuItem("Visão geral (12m)", tabName = "visao_geral_12m", icon = icon("tachometer-alt")),
       menuItem("Séries temporais", tabName = "series", icon = icon("chart-line")),
-      menuItem("Quebras por tipo de crédito", tabName = "quebras", icon = icon("project-diagram"))
+      menuItem("Comparação", tabName = "comparacao", icon = icon("balance-scale"))
     ),
     dateRangeInput(
       inputId   = "periodo",
-      label     = "Período:",
-      start     = data_inicio_default,
+      label     = "Período (mês de referência):",
+      start     = max(data_fim_default - 365 * 2, data_inicio_default),
       end       = data_fim_default,
       format    = "yyyy-mm-dd",
       startview = "year"
-    )
+    ),
+    selectInput(
+      inputId = "x_freq",
+      label   = "Frequência de datas no eixo X:",
+      choices = c(
+        "Mensal"     = "1 month",
+        "Bimestral"  = "2 months",
+        "Trimestral" = "3 months",
+        "Semestral"  = "6 months",
+        "Anual"      = "12 months"
+      ),
+      selected = "3 months"
+    ),
+    tags$small(style = "display:block; margin-top:6px; color:#666;", textOutput("txt_ultima_atualizacao")),
+    tags$small(style = "display:block; margin-top:4px; color:#666;", "Obs.: valores monetários exibidos em R$ bilhões (bi)."),
+    actionButton("btn_12m", "Últimos 12 meses"),
+    actionButton("btn_24m", "Últimos 24 meses"),
+    actionButton("btn_todo", "Desde 2015")
   ),
   
   dashboardBody(
     tabItems(
       #-------------------------
-      # Aba: Visão geral
+      # Aba: Visão geral (último mês)
       #-------------------------
       tabItem(
-        tabName = "visao_geral",
+        tabName = "visao_geral_mes",
         fluidRow(
-          valueBoxOutput("kpi_saldo_pf",    width = 4),
-          valueBoxOutput("kpi_saldo_pj",    width = 4),
-          valueBoxOutput("kpi_saldo_total", width = 4)
+          box(
+            width = 12, status = "info", solidHeader = TRUE, title = "Como ler estes números",
+            HTML(
+              "<b>Referência:</b> último mês disponível no arquivo.<br>",
+              "<b>Saldo e Concessões:</b> valor do mês em <b>R$ bilhões (bi)</b>.<br>",
+              "<b>Taxa de juros e Inadimplência:</b> valor do mês em <b>%</b>.<br>"
+            )
+          )
         ),
         fluidRow(
-          valueBoxOutput("kpi_inad_pf",     width = 4),
-          valueBoxOutput("kpi_inad_pj",     width = 4),
-          valueBoxOutput("kpi_inad_total",  width = 4)
+          valueBoxOutput("kpi_saldo_mes_pf",    width = 4),
+          valueBoxOutput("kpi_saldo_mes_pj",    width = 4),
+          valueBoxOutput("kpi_saldo_mes_total", width = 4)
+        ),
+        fluidRow(
+          valueBoxOutput("kpi_conc_mes_pf",    width = 4),
+          valueBoxOutput("kpi_conc_mes_pj",    width = 4),
+          valueBoxOutput("kpi_conc_mes_total", width = 4)
+        ),
+        fluidRow(
+          valueBoxOutput("kpi_juros_mes_pf",    width = 4),
+          valueBoxOutput("kpi_juros_mes_pj",    width = 4),
+          valueBoxOutput("kpi_juros_mes_total", width = 4)
+        ),
+        fluidRow(
+          valueBoxOutput("kpi_inad_mes_pf",    width = 4),
+          valueBoxOutput("kpi_inad_mes_pj",    width = 4),
+          valueBoxOutput("kpi_inad_mes_total", width = 4)
+        )
+      ),
+      
+      #-------------------------
+      # Aba: Visão geral (12m) - como era antes (acumulado/média)
+      #-------------------------
+      tabItem(
+        tabName = "visao_geral_12m",
+        fluidRow(
+          box(
+            width = 12, status = "info", solidHeader = TRUE, title = "Como ler estes números",
+            HTML(
+              "<b>Janela:</b> últimos 12 meses disponíveis no arquivo (terminando no último mês exibido).<br>",
+              "<b>Saldo e Concessões:</b> <u>acumulado</u> em 12 meses (soma mensal) em <b>R$ bilhões (bi)</b>.<br>",
+              "<b>Taxa de juros e Inadimplência:</b> <u>média</u> em 12 meses em <b>%</b>.<br>"
+            )
+          )
+        ),
+        fluidRow(
+          valueBoxOutput("kpi_saldo12_pf",    width = 4),
+          valueBoxOutput("kpi_saldo12_pj",    width = 4),
+          valueBoxOutput("kpi_saldo12_total", width = 4)
+        ),
+        fluidRow(
+          valueBoxOutput("kpi_conc12_pf",    width = 4),
+          valueBoxOutput("kpi_conc12_pj",    width = 4),
+          valueBoxOutput("kpi_conc12_total", width = 4)
+        ),
+        fluidRow(
+          valueBoxOutput("kpi_juros12_pf",    width = 4),
+          valueBoxOutput("kpi_juros12_pj",    width = 4),
+          valueBoxOutput("kpi_juros12_total", width = 4)
+        ),
+        fluidRow(
+          valueBoxOutput("kpi_inad12_pf",    width = 4),
+          valueBoxOutput("kpi_inad12_pj",    width = 4),
+          valueBoxOutput("kpi_inad12_total", width = 4)
         )
       ),
       
@@ -208,6 +273,21 @@ ui <- dashboardPage(
             )
           )
         ),
+        column(
+          width = 4,
+          selectInput(
+            inputId = "ts_tipo",
+            label   = "Tipo de visualização:",
+            choices = c(
+              "Nível (R$ bilhões)"               = "nivel",
+              "Desvio desde o início (Δ R$ bi)"  = "desvio",
+              "Índice (base 100)"                = "indice",
+              "Variação m/m (%)"                 = "mm",
+              "Variação a/a (%)"                 = "aa"
+            ),
+            selected = "nivel"
+          )
+        ),
         fluidRow(
           box(
             width = 12,
@@ -226,6 +306,67 @@ ui <- dashboardPage(
             solidHeader = TRUE,
             collapsible = TRUE,
             DTOutput("tabela_ts")
+          )
+        )
+      ),
+      
+      #-------------------------
+      # Aba: Comparação
+      #-------------------------
+      tabItem(
+        tabName = "comparacao",
+        fluidRow(
+          box(
+            width = 12,
+            title = "Selecione séries para comparar (mesmo tipo de unidade)",
+            status = "primary",
+            solidHeader = TRUE,
+            collapsible = TRUE,
+            column(
+              width = 6,
+              selectizeInput(
+                inputId = "cmp_series",
+                label   = "Séries (pode selecionar várias):",
+                choices = indicadores_meta %>%
+                  arrange(grupo, subgrupo, segmento, carteira, nome_curto) %>%
+                  pull(nome_curto),
+                selected = c("Saldo total PF", "Saldo total PJ", "Saldo total"),
+                multiple = TRUE,
+                options  = list(placeholder = "Digite para buscar...")
+              )
+            ),
+            column(
+              width = 3,
+              selectInput(
+                inputId = "cmp_tipo",
+                label   = "Tipo de visualização:",
+                choices = c(
+                  "Nível (R$ bilhões ou %)"        = "nivel",
+                  "Índice (base 100)"              = "indice",
+                  "Variação m/m (%)"               = "mm",
+                  "Variação a/a (%)"               = "aa"
+                ),
+                selected = "nivel"
+              )
+            ),
+            column(
+              width = 3,
+              checkboxInput(
+                inputId = "cmp_legenda",
+                label = "Mostrar legenda",
+                value = TRUE
+              )
+            )
+          )
+        ),
+        fluidRow(
+          box(
+            width = 12,
+            title = textOutput("titulo_grafico_cmp"),
+            status = "primary",
+            solidHeader = TRUE,
+            collapsible = TRUE,
+            plotOutput("plot_cmp", height = "420px")
           )
         )
       ),
@@ -280,8 +421,12 @@ ui <- dashboardPage(
 #----------------------------------------
 # Server
 #----------------------------------------
-
 server <- function(input, output, session) {
+  
+  output$txt_ultima_atualizacao <- renderText({
+    if (nrow(dados_bcb) == 0) return("Última atualização: —")
+    paste0("Último mês no arquivo: ", format(max(dados_bcb$data), "%m/%Y"))
+  })
   
   # Atualiza as opções de série quando muda o grupo (Saldo, Concessões, etc.)
   observeEvent(input$ts_grupo, {
@@ -297,8 +442,27 @@ server <- function(input, output, session) {
     )
   }, ignoreInit = TRUE)
   
+  # Botões de período (ancorados no último mês do arquivo)
+  observeEvent(input$btn_12m, {
+    fim    <- if (nrow(dados_bcb) > 0) max(dados_bcb$data) else Sys.Date()
+    inicio <- fim - 365
+    updateDateRangeInput(session, "periodo", start = inicio, end = fim)
+  })
+  
+  observeEvent(input$btn_24m, {
+    fim    <- if (nrow(dados_bcb) > 0) max(dados_bcb$data) else Sys.Date()
+    inicio <- fim - 365 * 2
+    updateDateRangeInput(session, "periodo", start = inicio, end = fim)
+  })
+  
+  observeEvent(input$btn_todo, {
+    fim    <- if (nrow(dados_bcb) > 0) max(dados_bcb$data) else Sys.Date()
+    inicio <- as.Date("2015-01-01")
+    updateDateRangeInput(session, "periodo", start = inicio, end = fim)
+  })
+  
   #-------------------------
-  # Dados filtrados por período
+  # Dados filtrados por período (global)
   #-------------------------
   dados_todos <- reactive({
     validate(
@@ -307,97 +471,187 @@ server <- function(input, output, session) {
     )
     
     dados_bcb %>%
-      filter(
-        data >= input$periodo[1],
-        data <= input$periodo[2]
-      )
+      filter(data >= input$periodo[1], data <= input$periodo[2])
+  })
+  
+  #-------------------------
+  # Helper: breaks do eixo X (garante incluir o último mês disponível)
+  #-------------------------
+  gerar_breaks_x <- function(datas, by = "3 months") {
+    datas <- datas[!is.na(datas)]
+    if (length(datas) == 0) return(NULL)
+    
+    dmin <- lubridate::floor_date(min(datas), "month")
+    dmax <- max(datas)
+    
+    brks <- seq.Date(from = dmin, to = lubridate::ceiling_date(dmax, "month"), by = by)
+    brks <- sort(unique(c(brks, dmax))) # garante o último mês como tick
+    brks
+  }
+  
+  add_x_scale <- function(p, df) {
+    p + scale_x_date(
+      limits = c(min(df$data, na.rm = TRUE), max(df$data, na.rm = TRUE)),
+      breaks = gerar_breaks_x(df$data, by = input$x_freq),
+      date_labels = "%m/%Y",
+      expand = expansion(mult = c(0.01, 0.01))
+    )
+  }
+  
+  #-------------------------
+  # Último mês (sempre o último mês do arquivo)
+  #-------------------------
+  dados_ultimo_mes <- reactive({
+    validate(need(nrow(dados_bcb) > 0, "Nenhum dado disponível."))
+    fim <- max(dados_bcb$data)
+    dados_bcb %>% filter(data == fim)
+  })
+  
+  txt_ref_mes <- reactive({
+    if (nrow(dados_bcb) == 0) return("—")
+    fim <- max(dados_bcb$data)
+    formatar_mes_ano(fim)
+  })
+  
+  #-------------------------
+  # Janela "últimos 12 meses" (sempre a partir do último mês do arquivo)
+  #-------------------------
+  dados_12m <- reactive({
+    validate(need(nrow(dados_bcb) > 0, "Nenhum dado disponível."))
+    
+    fim <- max(dados_bcb$data)
+    inicio <- fim %m-% months(11) # 12 pontos mensais
+    
+    dados_bcb %>%
+      filter(data >= inicio, data <= fim)
+  })
+  
+  txt_janela_12m <- reactive({
+    if (nrow(dados_bcb) == 0) return("—")
+    fim <- max(dados_bcb$data)
+    inicio <- fim %m-% months(11)
+    paste0(formatar_mes_ano(inicio), " a ", formatar_mes_ano(fim))
   })
   
   #--------------------------------
-  # VISÃO GERAL - KPIs
+  # KPIs - ÚLTIMO MÊS
   #--------------------------------
-  kpi_serie <- function(nome_serie, titulo, cor = "blue") {
+  kpi_last_monetario <- function(nome_serie, titulo, cor = "blue", icon_name = "") {
     renderValueBox({
-      df <- dados_todos() %>% filter(series.name == nome_serie)
+      df <- dados_ultimo_mes() %>% filter(series.name == nome_serie) %>% arrange(data)
+      validate(need(nrow(df) > 0, paste("Sem dados para", nome_serie)))
       
-      validate(
-        need(nrow(df) > 0,
-             paste("Sem dados para", nome_serie, "no período selecionado."))
-      )
-      
-      df <- df %>% arrange(data)
-      ultimo <- dplyr::last(df)
-      
-      valor_txt <- formatar_bilhoes(ultimo$valor)
-      data_txt  <- formatar_mes_ano(ultimo$data)
-      mm_txt    <- formatar_pct(ultimo$var_mm)
-      aa_txt    <- formatar_pct(ultimo$var_aa)
-      
-      subtitle_html <- HTML(
-        paste0(
-          titulo, " (", data_txt, ")",
-          "<br>m/m: ", mm_txt,
-          " | a/a: ", aa_txt
-        )
-      )
+      valor_bi <- df$valor[1] / 1000
+      ref_txt  <- txt_ref_mes()
       
       valueBox(
-        value    = valor_txt,
-        subtitle = subtitle_html,
-        icon     = icon("wallet"),
+        value    = fmt_bi_brl(valor_bi),
+        subtitle = HTML(paste0(titulo, "<br><span style='color:#0000000;'>Referência: ", ref_txt, " • R$ bi</span>")),
+        icon     = icon(icon_name),
         color    = cor
       )
     })
   }
   
-  output$kpi_saldo_pf    <- kpi_serie("Saldo total PF",   "Saldo total PF",   "blue")
-  output$kpi_saldo_pj    <- kpi_serie("Saldo total PJ",   "Saldo total PJ",   "blue")
-  output$kpi_saldo_total <- kpi_serie("Saldo total",      "Saldo total",      "blue")
-  
-  kpi_inadimplencia <- function(nome_serie, titulo, cor = "red") {
+  kpi_last_pct <- function(nome_serie, titulo, cor = "red", icon_name = "") {
     renderValueBox({
-      df <- dados_todos() %>% filter(series.name == nome_serie)
+      df <- dados_ultimo_mes() %>% filter(series.name == nome_serie) %>% arrange(data)
+      validate(need(nrow(df) > 0, paste("Sem dados para", nome_serie)))
       
-      validate(
-        need(nrow(df) > 0,
-             paste("Sem dados para", nome_serie, "no período selecionado."))
-      )
-      
-      df <- df %>% arrange(data)
-      ultimo <- dplyr::last(df)
-      
-      valor_txt <- formatar_pct(ultimo$valor)
-      data_txt  <- formatar_mes_ano(ultimo$data)
-      mm_txt    <- formatar_pct(ultimo$var_mm)
-      aa_txt    <- formatar_pct(ultimo$var_aa)
-      
-      subtitle_html <- HTML(
-        paste0(
-          titulo, " (", data_txt, ")",
-          "<br>m/m: ", mm_txt,
-          " | a/a: ", aa_txt
-        )
-      )
+      valor <- df$valor[1]
+      ref_txt <- txt_ref_mes()
       
       valueBox(
-        value    = valor_txt,
-        subtitle = subtitle_html,
-        icon     = icon("exclamation-triangle"),
+        value    = fmt_pct(valor),
+        subtitle = HTML(paste0(titulo, "<br><span style='color:#0000000;'>Referência: ", ref_txt, " • %</span>")),
+        icon     = icon(icon_name),
         color    = cor
       )
     })
   }
   
-  output$kpi_inad_pf    <- kpi_inadimplencia("Inadimplência PF",    "Inadimplência PF")
-  output$kpi_inad_pj    <- kpi_inadimplencia("Inadimplência PJ",    "Inadimplência PJ")
-  output$kpi_inad_total <- kpi_inadimplencia("Inadimplência total", "Inadimplência total")
+  # Saldo (último mês) — PF/PJ/Total
+  output$kpi_saldo_mes_pf    <- kpi_last_monetario("Saldo total PF", "Saldo PF", "blue")
+  output$kpi_saldo_mes_pj    <- kpi_last_monetario("Saldo total PJ", "Saldo PJ", "blue")
+  output$kpi_saldo_mes_total <- kpi_last_monetario("Saldo total",    "Saldo Total", "blue")
+  
+  # Concessões (último mês) — PF/PJ/Total
+  output$kpi_conc_mes_pf    <- kpi_last_monetario("Concessões totais PF", "Concessões PF", "aqua")
+  output$kpi_conc_mes_pj    <- kpi_last_monetario("Concessões totais PJ", "Concessões PJ", "aqua")
+  output$kpi_conc_mes_total <- kpi_last_monetario("Concessões totais",    "Concessões Total", "aqua")
+  
+  # Juros (último mês) — PF/PJ/Total
+  output$kpi_juros_mes_pf    <- kpi_last_pct("Juros total PF", "Taxa de juros PF", "yellow")
+  output$kpi_juros_mes_pj    <- kpi_last_pct("Juros total PJ", "Taxa de juros PJ", "yellow")
+  output$kpi_juros_mes_total <- kpi_last_pct("Juros total",    "Taxa de juros Total", "yellow")
+  
+  # Inadimplência (último mês) — PF/PJ/Total
+  output$kpi_inad_mes_pf    <- kpi_last_pct("Inadimplência PF",    "Inadimplência PF", "red")
+  output$kpi_inad_mes_pj    <- kpi_last_pct("Inadimplência PJ",    "Inadimplência PJ", "red")
+  output$kpi_inad_mes_total <- kpi_last_pct("Inadimplência total", "Inadimplência Total", "red")
+  
+  #--------------------------------
+  # KPIs - 12 MESES (acumulado/média)
+  #--------------------------------
+  kpi_sum_12m_monetario <- function(nome_serie, titulo, cor = "blue", icon_name = "") {
+    renderValueBox({
+      df <- dados_12m() %>% filter(series.name == nome_serie) %>% arrange(data)
+      validate(need(nrow(df) > 0, paste("Sem dados para", nome_serie)))
+      
+      valor_12m_bi <- sum(df$valor, na.rm = TRUE) / 1000
+      janela_txt <- txt_janela_12m()
+      
+      valueBox(
+        value    = fmt_bi_brl(valor_12m_bi),
+        subtitle = HTML(paste0(titulo, "<br><span style='color:#0000000;'>Acumulado 12m (", janela_txt, ") • R$ bi</span>")),
+        icon     = icon(icon_name),
+        color    = cor
+      )
+    })
+  }
+  
+  kpi_mean_12m_pct <- function(nome_serie, titulo, cor = "red", icon_name = "") {
+    renderValueBox({
+      df <- dados_12m() %>% filter(series.name == nome_serie) %>% arrange(data)
+      validate(need(nrow(df) > 0, paste("Sem dados para", nome_serie)))
+      
+      valor_12m <- mean(df$valor, na.rm = TRUE)
+      janela_txt <- txt_janela_12m()
+      
+      valueBox(
+        value    = fmt_pct(valor_12m),
+        subtitle = HTML(paste0(titulo, "<br><span style='color:#0000000;'>Média 12m (", janela_txt, ") • %</span>")),
+        icon     = icon(icon_name),
+        color    = cor
+      )
+    })
+  }
+  
+  # Saldo (acumulado 12m) — PF/PJ/Total
+  output$kpi_saldo12_pf    <- kpi_sum_12m_monetario("Saldo total PF", "Saldo PF", "blue")
+  output$kpi_saldo12_pj    <- kpi_sum_12m_monetario("Saldo total PJ", "Saldo PJ", "blue")
+  output$kpi_saldo12_total <- kpi_sum_12m_monetario("Saldo total",    "Saldo Total", "blue")
+  
+  # Concessões (acumulado 12m) — PF/PJ/Total
+  output$kpi_conc12_pf    <- kpi_sum_12m_monetario("Concessões totais PF", "Concessões PF", "aqua")
+  output$kpi_conc12_pj    <- kpi_sum_12m_monetario("Concessões totais PJ", "Concessões PJ", "aqua")
+  output$kpi_conc12_total <- kpi_sum_12m_monetario("Concessões totais",    "Concessões Total", "aqua")
+  
+  # Juros (média 12m) — PF/PJ/Total
+  output$kpi_juros12_pf    <- kpi_mean_12m_pct("Juros total PF", "Taxa de juros PF", "yellow")
+  output$kpi_juros12_pj    <- kpi_mean_12m_pct("Juros total PJ", "Taxa de juros PJ", "yellow")
+  output$kpi_juros12_total <- kpi_mean_12m_pct("Juros total",    "Taxa de juros Total", "yellow")
+  
+  # Inadimplência (média 12m) — PF/PJ/Total
+  output$kpi_inad12_pf    <- kpi_mean_12m_pct("Inadimplência PF",    "Inadimplência PF", "red")
+  output$kpi_inad12_pj    <- kpi_mean_12m_pct("Inadimplência PJ",    "Inadimplência PJ", "red")
+  output$kpi_inad12_total <- kpi_mean_12m_pct("Inadimplência total", "Inadimplência Total", "red")
   
   #--------------------------------
   # SÉRIES TEMPORAIS
   #--------------------------------
   output$titulo_grafico_ts <- renderText({
-    df_meta <- indicadores_meta %>%
-      filter(nome_curto == input$ts_serie)
+    df_meta <- indicadores_meta %>% filter(nome_curto == input$ts_serie)
     if (nrow(df_meta) == 0) return(input$ts_serie)
     
     paste0(
@@ -410,29 +664,87 @@ server <- function(input, output, session) {
   
   output$plot_ts <- renderPlot({
     df <- dados_todos() %>%
-      filter(series.name == input$ts_serie)
+      filter(series.name == input$ts_serie) %>%
+      arrange(data)
     
-    validate(
-      need(nrow(df) > 0,
-           "Sem dados retornados para essa série e período. Tente ampliar o intervalo.")
-    )
-    
-    df <- df %>% arrange(data)
+    validate(need(nrow(df) > 0, "Sem dados retornados para essa série e período. Tente ampliar o intervalo."))
     
     grupo_serie   <- unique(df$grupo)
     eh_percentual <- grupo_serie %in% c("Juros", "Inadimplência", "Spread")
+    tipo <- if (is.null(input$ts_tipo)) "nivel" else input$ts_tipo
     
-    df <- df %>%
-      mutate(
-        valor_plot = ifelse(eh_percentual, valor, valor / 1e9)
-      )
-    
-    y_lab <- if (eh_percentual) "% a.a." else "R$ bilhões"
-    
-    ggplot(df, aes(x = data, y = valor_plot)) +
-      geom_line() +
-      labs(x = "", y = y_lab) +
-      theme_minimal()
+    if (tipo == "nivel") {
+      if (eh_percentual) {
+        df <- df %>% mutate(valor_plot = valor)
+        y_lab <- "% a.a."
+      } else {
+        df <- df %>% mutate(valor_plot = valor / 1000)
+        y_lab <- "R$ bilhões (bi)"
+      }
+      
+      y_min <- min(df$valor_plot, na.rm = TRUE)
+      y_max <- max(df$valor_plot, na.rm = TRUE)
+      if (y_min == y_max) {
+        eps <- if (y_min == 0) 0.1 else abs(y_min) * 0.01
+        y_min <- y_min - eps
+        y_max <- y_max + eps
+      }
+      
+      p <- ggplot(df, aes(x = data, y = valor_plot)) +
+        geom_line(size = 1.1) +
+        labs(x = "", y = y_lab) +
+        scale_y_continuous(limits = c(y_min, y_max)) +
+        theme_minimal()
+      
+      add_x_scale(p, df)
+      
+    } else if (tipo == "desvio") {
+      df <- df %>%
+        mutate(
+          nivel_base = ifelse(eh_percentual, valor, valor / 1000),
+          valor_base = dplyr::first(nivel_base),
+          valor_plot = nivel_base - valor_base
+        )
+      
+      y_lab <- if (eh_percentual) "Desvio em p.p. desde o início" else "Δ R$ bilhões (bi) desde o início"
+      
+      p <- ggplot(df, aes(x = data, y = valor_plot)) +
+        geom_line(size = 1.1) +
+        labs(x = "", y = y_lab) +
+        theme_minimal()
+      
+      add_x_scale(p, df)
+      
+    } else if (tipo == "indice") {
+      df <- df %>% mutate(valor_base = dplyr::first(valor), valor_plot = (valor / valor_base) * 100)
+      
+      p <- ggplot(df, aes(x = data, y = valor_plot)) +
+        geom_line(size = 1.1) +
+        labs(x = "", y = "Índice (base 100)") +
+        theme_minimal()
+      
+      add_x_scale(p, df)
+      
+    } else if (tipo == "mm") {
+      df <- df %>% mutate(valor_plot = var_mm)
+      
+      p <- ggplot(df, aes(x = data, y = valor_plot)) +
+        geom_line(size = 1.1) +
+        labs(x = "", y = "Variação m/m (%)") +
+        theme_minimal()
+      
+      add_x_scale(p, df)
+      
+    } else if (tipo == "aa") {
+      df <- df %>% mutate(valor_plot = var_aa)
+      
+      p <- ggplot(df, aes(x = data, y = valor_plot)) +
+        geom_line(size = 1.1) +
+        labs(x = "", y = "Variação a/a (%)") +
+        theme_minimal()
+      
+      add_x_scale(p, df)
+    }
   })
   
   output$tabela_ts <- renderDT({
@@ -440,131 +752,145 @@ server <- function(input, output, session) {
       filter(series.name == input$ts_serie) %>%
       arrange(data)
     
-    validate(
-      need(nrow(df) > 0,
-           "Sem dados para exibir na tabela.")
-    )
+    validate(need(nrow(df) > 0, "Sem dados para exibir na tabela."))
     
     df <- df %>%
       mutate(
-        data   = as.Date(data),
+        data = as.Date(data),
+        eh_pct = grupo %in% c("Juros", "Inadimplência", "Spread"),
+        valor_exib = ifelse(eh_pct, valor, valor / 1000),
+        unidade_valor = ifelse(eh_pct, "%", "R$ bi"),
         var_mm = round(var_mm, 2),
         var_aa = round(var_aa, 2)
       ) %>%
-      select(
-        data, series.name, grupo, carteira, segmento, subgrupo,
-        valor, var_mm, var_aa
-      )
+      select(data, series.name, grupo, carteira, segmento, subgrupo, valor_exib, unidade_valor, var_mm, var_aa)
     
     datatable(
       df,
       options = list(
         pageLength = 12,
-        scrollX    = TRUE
+        scrollX    = TRUE,
+        language   = list(decimal = ",", thousands = ".")
       )
-    )
+    ) %>%
+      DT::formatRound(columns = c("valor_exib"), digits = 3, dec.mark = ",", mark = ".") %>%
+      DT::formatRound(columns = c("var_mm", "var_aa"), digits = 2, dec.mark = ",", mark = ".")
   })
   
   output$download_csv <- downloadHandler(
-    filename = function() {
-      paste0("serie_", gsub(" ", "_", input$ts_serie), "_", Sys.Date(), ".csv")
-    },
+    filename = function() paste0("serie_", gsub(" ", "_", input$ts_serie), "_", Sys.Date(), ".csv"),
     content = function(file) {
-      df <- dados_todos() %>%
-        filter(series.name == input$ts_serie) %>%
-        arrange(data)
+      df <- dados_todos() %>% filter(series.name == input$ts_serie) %>% arrange(data)
       readr::write_csv(df, file)
     }
   )
   
   output$download_png <- downloadHandler(
-    filename = function() {
-      paste0("serie_", gsub(" ", "_", input$ts_serie), "_", Sys.Date(), ".png")
-    },
+    filename = function() paste0("serie_", gsub(" ", "_", input$ts_serie), "_", Sys.Date(), ".png"),
     content = function(file) {
-      df <- dados_todos() %>%
-        filter(series.name == input$ts_serie) %>%
-        arrange(data)
-      
-      validate(
-        need(nrow(df) > 0,
-             "Sem dados para gerar o gráfico.")
-      )
+      df <- dados_todos() %>% filter(series.name == input$ts_serie) %>% arrange(data)
+      validate(need(nrow(df) > 0, "Sem dados para gerar o gráfico."))
       
       grupo_serie   <- unique(df$grupo)
       eh_percentual <- grupo_serie %in% c("Juros", "Inadimplência", "Spread")
       
-      df <- df %>%
-        mutate(
-          valor_plot = ifelse(eh_percentual, valor, valor / 1e9)
-        )
-      
-      y_lab <- if (eh_percentual) "% a.a." else "R$ bilhões"
+      if (eh_percentual) {
+        df <- df %>% mutate(valor_plot = valor)
+        y_lab <- "% a.a."
+      } else {
+        df <- df %>% mutate(valor_plot = valor / 1000)
+        y_lab <- "R$ bilhões (bi)"
+      }
       
       p <- ggplot(df, aes(x = data, y = valor_plot)) +
         geom_line() +
-        labs(
-          title = input$ts_serie,
-          x = "",
-          y = y_lab
+        labs(title = input$ts_serie, x = "", y = y_lab) +
+        scale_x_date(
+          limits = c(min(df$data, na.rm = TRUE), max(df$data, na.rm = TRUE)),
+          breaks = gerar_breaks_x(df$data, by = input$x_freq),
+          date_labels = "%m/%Y",
+          expand = expansion(mult = c(0.01, 0.01))
         ) +
         theme_minimal()
       
-      ggplot2::ggsave(
-        filename = file,
-        plot     = p,
-        device   = "png",
-        width    = 8,
-        height   = 4,
-        dpi      = 150
-      )
+      ggplot2::ggsave(filename = file, plot = p, device = "png", width = 8, height = 4, dpi = 150)
     }
   )
   
   #--------------------------------
-  # QUEBRAS POR TIPO DE CRÉDITO
+  # COMPARAÇÃO (múltiplas séries)
   #--------------------------------
-  output$titulo_grafico_quebras <- renderText({
-    paste(
-      "Indicador:",
-      input$qb_grupo,
-      "- Tipo de crédito:",
-      input$qb_subgrupo
-    )
+  output$titulo_grafico_cmp <- renderText({
+    req(input$cmp_series)
+    paste0("Comparação: ", length(input$cmp_series), " série(s) • tipo: ", input$cmp_tipo)
   })
   
-  output$plot_quebras <- renderPlot({
+  output$plot_cmp <- renderPlot({
+    req(input$cmp_series)
+    
     df <- dados_todos() %>%
-      filter(
-        grupo    == input$qb_grupo,
-        subgrupo == input$qb_subgrupo,
-        segmento %in% c("PF", "PJ")
-      ) %>%
-      arrange(data)
+      filter(series.name %in% input$cmp_series) %>%
+      arrange(series.name, data)
     
-    validate(
-      need(nrow(df) > 0,
-           "Sem dados para essas quebras no período selecionado.")
-    )
+    validate(need(nrow(df) > 0, "Sem dados para as séries selecionadas no período."))
     
-    eh_percentual <- input$qb_grupo %in% c("Juros", "Inadimplência", "Spread")
+    # Regra simples: não misturar unidades (percentual vs monetário) no mesmo gráfico em "nível"
+    grupos_sel <- df %>% distinct(series.name, grupo)
+    eh_pct_por_serie <- grupos_sel %>%
+      mutate(eh_pct = grupo %in% c("Juros", "Inadimplência", "Spread")) %>%
+      distinct(series.name, eh_pct)
     
-    df <- df %>%
-      mutate(
-        valor_plot = ifelse(eh_percentual, valor, valor / 1e9)
+    if (input$cmp_tipo == "nivel") {
+      validate(
+        need(length(unique(eh_pct_por_serie$eh_pct)) == 1,
+             "Você selecionou séries com unidades diferentes (R$ e %). Para comparar em 'Nível', escolha séries do mesmo tipo (todas monetárias ou todas percentuais), ou use 'Índice' / 'Variações'.")
+      )
+    }
+    
+    if (input$cmp_tipo == "nivel") {
+      eh_percentual <- unique(eh_pct_por_serie$eh_pct)
+      if (eh_percentual) {
+        df <- df %>% mutate(valor_plot = valor)
+        y_lab <- "% a.a."
+      } else {
+        df <- df %>% mutate(valor_plot = valor / 1000)
+        y_lab <- "R$ bilhões (bi)"
+      }
+      
+    } else if (input$cmp_tipo == "indice") {
+      df <- df %>%
+        group_by(series.name) %>%
+        mutate(valor_base = first(valor), valor_plot = (valor / valor_base) * 100) %>%
+        ungroup()
+      y_lab <- "Índice (base 100)"
+      
+    } else if (input$cmp_tipo == "mm") {
+      df <- df %>% mutate(valor_plot = var_mm)
+      y_lab <- "Variação m/m (%)"
+      
+    } else if (input$cmp_tipo == "aa") {
+      df <- df %>% mutate(valor_plot = var_aa)
+      y_lab <- "Variação a/a (%)"
+    }
+    
+    p <- ggplot(df, aes(x = data, y = valor_plot, color = series.name)) +
+      geom_line(size = 1.5) +
+      labs(x = "", y = y_lab, color = "Série") +
+      theme_minimal() +
+      theme(
+        legend.title = element_text(size = 16),
+        legend.text  = element_text(size = 14)
       )
     
-    y_lab <- if (eh_percentual) "% a.a." else "R$ bilhões"
+    p <- add_x_scale(p, df)
     
-    ggplot(df, aes(x = data, y = valor_plot, color = segmento)) +
-      geom_line() +
-      labs(
-        x = "",
-        y = y_lab,
-        color = "Segmento"
-      ) +
-      theme_minimal()
+    if (!isTRUE(input$cmp_legenda)) {
+      p <- p + theme(legend.position = "none")
+    }
+    
+    p
   })
+
 }
 
 #----------------------------------------
